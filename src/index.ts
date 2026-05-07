@@ -7,9 +7,15 @@ class Real {
   }
 }
 
+// oxlint-disable-next-line typescript/no-explicit-any
 type PlistJsObj = any[] | Record<any, any>;
 
 type obj = NonNullable<unknown>;
+
+interface WriteEntries {
+  type: string;
+  entries: BplistEntry[];
+}
 
 function BPlistCreator(dicts: PlistJsObj): Buffer {
   const buffer = new WritableStreamBuffer();
@@ -93,7 +99,7 @@ function BPlistCreator(dicts: PlistJsObj): Buffer {
     });
   }
 
-  function write(entry) {
+  function write(entry: BplistEntry) {
     switch (entry.type) {
       case "dict":
         writeDict(entry);
@@ -178,7 +184,7 @@ function BPlistCreator(dicts: PlistJsObj): Buffer {
     }
   }
 
-  function writeUID(entry) {
+  function writeUID(entry: BplistEntry.UIDEntry) {
     writeIntHeader(0x8, 0x0);
     writeID(entry.value);
   }
@@ -190,11 +196,11 @@ function BPlistCreator(dicts: PlistJsObj): Buffer {
     });
   }
 
-  function writeBoolean(entry) {
+  function writeBoolean(entry: BplistEntry.BooleanEntry) {
     writeByte(entry.value ? 0x09 : 0x08);
   }
 
-  function writeString(entry) {
+  function writeString(entry: BplistEntry.StringEntry) {
     if (entry.type === "string-utf16" || mustBeUtf16(entry.value)) {
       const utf16 = Buffer.from(entry.value, "ucs2");
       writeIntHeader(0x6, utf16.length / 2);
@@ -253,7 +259,7 @@ function BPlistCreator(dicts: PlistJsObj): Buffer {
     writeBytes(id, idSizeInBytes);
   }
 
-  function writeBytes(value, bytes, is_signedint?: boolean) {
+  function writeBytes(value, bytes: number, is_signedint?: boolean) {
     // write low-order bytes big-endian style
     const buf = Buffer.alloc(bytes);
     let z = 0;
@@ -275,14 +281,59 @@ function BPlistCreator(dicts: PlistJsObj): Buffer {
   }
 }
 
-function toEntries(dicts: obj) {
+declare namespace BplistEntry {
+  export interface DataEntry {
+    type: "data";
+    value: Buffer;
+  }
+  export interface DoubleEntry {
+    type: "double";
+    value: unknown;
+  }
+  export interface DateEntry {
+    type: "date";
+    value: Date;
+  }
+  export interface UIDEntry {
+    type: "UID";
+    value: number;
+  }
+  export interface StringEntry {
+    type: "string" | "string-utf16";
+    value: string;
+  }
+  export interface NumberEntry {
+    type: "number";
+    value: number;
+  }
+  export interface BooleanEntry {
+    type: "boolean";
+    value: boolean;
+  }
+  export interface BigintEntry {
+    type: "number";
+    value: bigint;
+  }
+}
+
+type BplistEntry =
+  | { type: "data"; value: Buffer }
+  | { type: "double"; value: unknown }
+  | { type: "date"; value: Date }
+  | { type: "UID"; value: number }
+  | { type: "string"; value: string }
+  | { type: "number"; value: number }
+  | { type: "boolean"; value: boolean }
+  | { type: "number"; value: bigint };
+
+function toEntries(dicts: obj): [BplistEntry, ...BplistEntry[]] {
   if (dicts.bplistOverride) {
     return [dicts];
   }
 
   if (Array.isArray(dicts)) {
     return toEntriesArray(dicts);
-  } else if (dicts instanceof Buffer) {
+  } else if (Buffer.isBuffer(dicts)) {
     return [
       {
         type: "data",
@@ -345,13 +396,13 @@ function toEntries(dicts: obj) {
         value: dicts,
       },
     ];
-  } else {
-    throw new Error("unhandled entry: " + dicts);
   }
+
+  throw new Error("unhandled entry: " + dicts);
 }
 
-function toEntriesArray(arr: obj[]) {
-  let results = [
+function toEntriesArray(arr: obj[]): WriteEntries[] {
+  let results: [WriteEntries, ...WriteEntries[]] = [
     {
       type: "array",
       entries: [],
