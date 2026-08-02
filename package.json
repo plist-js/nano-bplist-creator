@@ -10,7 +10,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/plist-js/node-bplist-creator.git"
+    "url": "git+https://github.com/plist-js/nano-bplist-creator.git"
   },
   "files": [
     "dist"
