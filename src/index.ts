@@ -1,22 +1,93 @@
 import { WritableStreamBuffer } from "nano-stream-buffers";
 
+import { computeIdSizeInBytes, computeOffsetSizeInBytes } from "./util";
+
 class Real {
-  value: unknown;
-  constructor(value: unknown) {
+  declare value: number;
+  constructor(value: number) {
     this.value = value;
   }
 }
 
-type PlistJsObj = any[] | Record<any, any>;
+declare namespace PlistJsObj {
+  export type PlistJsArray = PlistJsObj[];
+  export type PlistJsDict = { [key: PropertyKey]: PlistJsObj };
+  export type PlistJsUID = { UID: number };
+}
 
-type obj = NonNullable<unknown>;
+type PlistJsObj =
+  | PlistJsObj.PlistJsArray
+  | PlistJsObj.PlistJsDict
+  | PlistJsObj.PlistJsUID
+  | string
+  | Date;
+
+declare namespace BplistEntry {
+  export interface DataEntry {
+    type: "data";
+    value: Buffer;
+  }
+  export interface DoubleEntry {
+    type: "double";
+    value: number;
+  }
+  export interface DateEntry {
+    type: "date";
+    value: Date;
+  }
+  export interface UIDEntry {
+    type: "UID";
+    value: number;
+  }
+  export interface StringEntry {
+    type: "string" | "string-utf16";
+    value: string;
+  }
+  export interface NumberEntry {
+    type: "number";
+    value: number;
+  }
+  export interface BooleanEntry {
+    type: "boolean";
+    value: boolean;
+  }
+  export interface BigintEntry {
+    type: "number";
+    value: bigint;
+  }
+  export type NumberLikeEntry =
+    | BplistEntry.DoubleEntry
+    | BplistEntry.NumberEntry
+    | BplistEntry.BigintEntry;
+  export interface DictEntry {
+    type: "dict";
+    entryKeys: BplistEntry[];
+    entryValues: BplistEntry[];
+  }
+  export interface ArrayEntry {
+    type: "array";
+    entries: BplistEntry[];
+  }
+}
+
+type BplistEntry =
+  | BplistEntry.DataEntry
+  | BplistEntry.DoubleEntry
+  | BplistEntry.DateEntry
+  | BplistEntry.UIDEntry
+  | BplistEntry.StringEntry
+  | BplistEntry.NumberEntry
+  | BplistEntry.BooleanEntry
+  | BplistEntry.BigintEntry
+  | BplistEntry.DictEntry
+  | BplistEntry.ArrayEntry;
 
 function BPlistCreator(dicts: PlistJsObj): Buffer {
   const buffer = new WritableStreamBuffer();
   buffer.write(Buffer.from("bplist00"));
 
   if (Array.isArray(dicts) && dicts.length === 1) {
-    dicts = dicts[0];
+    dicts = dicts[0]!;
   }
 
   let entries = toEntries(dicts);
@@ -45,9 +116,8 @@ function BPlistCreator(dicts: PlistJsObj): Buffer {
     const strings = {};
     let entryId = 0;
     entries.forEach(function (entry) {
-      if (entry.id) {
-        return;
-      }
+      if (entry.id) return;
+
       if (entry.type === "string") {
         if (!entry.bplistOverride && strings.hasOwnProperty(entry.value)) {
           entry.type = "stringref";
@@ -93,7 +163,7 @@ function BPlistCreator(dicts: PlistJsObj): Buffer {
     });
   }
 
-  function write(entry) {
+  function write(entry: BplistEntry) {
     switch (entry.type) {
       case "dict":
         writeDict(entry);
@@ -122,17 +192,17 @@ function BPlistCreator(dicts: PlistJsObj): Buffer {
         writeData(entry);
         break;
       default:
-        throw new Error("unhandled entry type: " + entry.type);
+        throw new Error(`unhandled entry type: ${entry.type}`);
     }
   }
 
-  function writeDate(entry) {
+  function writeDate(entry: BplistEntry.DateEntry) {
     writeByte(0x33);
     const date = Date.parse(entry.value) / 1000 - 978307200;
     writeDouble(date);
   }
 
-  function writeDict(entry) {
+  function writeDict(entry: BplistEntry.DictEntry) {
     writeIntHeader(0xd, entry.entryKeys.length);
     entry.entryKeys.forEach(function (entry) {
       writeID(entry.id);
@@ -142,7 +212,7 @@ function BPlistCreator(dicts: PlistJsObj): Buffer {
     });
   }
 
-  function writeNumber(entry) {
+  function writeNumber(entry: BplistEntry.NumberLikeEntry) {
     if (typeof entry.value === "bigint") {
       const width = 16;
       const hex = entry.value.toString(width);
@@ -178,30 +248,30 @@ function BPlistCreator(dicts: PlistJsObj): Buffer {
     }
   }
 
-  function writeUID(entry) {
+  function writeUID(entry: BplistEntry.UIDEntry) {
     writeIntHeader(0x8, 0x0);
     writeID(entry.value);
   }
 
-  function writeArray(entry) {
+  function writeArray(entry: BplistEntry.ArrayEntry) {
     writeIntHeader(0xa, entry.entries.length);
     entry.entries.forEach(function (e) {
       writeID(e.id);
     });
   }
 
-  function writeBoolean(entry) {
+  function writeBoolean(entry: BplistEntry.BooleanEntry) {
     writeByte(entry.value ? 0x09 : 0x08);
   }
 
-  function writeString(entry) {
+  function writeString(entry: BplistEntry.StringEntry) {
     if (entry.type === "string-utf16" || mustBeUtf16(entry.value)) {
       const utf16 = Buffer.from(entry.value, "ucs2");
       writeIntHeader(0x6, utf16.length / 2);
       // needs to be big endian so swap the bytes
       for (let i = 0; i < utf16.length; i += 2) {
-        const t = utf16[i + 0];
-        utf16[i + 0] = utf16[i + 1];
+        const t = utf16[i + 0]!;
+        utf16[i + 0] = utf16[i + 1]!;
         utf16[i + 1] = t;
       }
       buffer.write(utf16);
@@ -212,26 +282,26 @@ function BPlistCreator(dicts: PlistJsObj): Buffer {
     }
   }
 
-  function writeData(entry) {
+  function writeData(entry: BplistEntry.DataEntry) {
     writeIntHeader(0x4, entry.value.length);
     buffer.write(entry.value);
   }
 
-  function writeLong(l) {
+  function writeLong(l: number) {
     writeBytes(l, 8);
   }
 
-  function writeByte(b) {
+  function writeByte(b: number) {
     buffer.write(Buffer.from([b]));
   }
 
-  function writeDouble(v) {
+  function writeDouble(v: number) {
     const buf = Buffer.alloc(8);
     buf.writeDoubleBE(v, 0);
     buffer.write(buf);
   }
 
-  function writeIntHeader(kind, value) {
+  function writeIntHeader(kind: number, value: number) {
     if (value < 15) {
       writeByte((kind << 4) + value);
     } else if (value < 256) {
@@ -249,11 +319,11 @@ function BPlistCreator(dicts: PlistJsObj): Buffer {
     }
   }
 
-  function writeID(id) {
+  function writeID(id: number) {
     writeBytes(id, idSizeInBytes);
   }
 
-  function writeBytes(value, bytes, is_signedint?: boolean) {
+  function writeBytes(value: number, bytes: number, is_signedint?: boolean) {
     // write low-order bytes big-endian style
     const buf = Buffer.alloc(bytes);
     let z = 0;
@@ -270,92 +340,51 @@ function BPlistCreator(dicts: PlistJsObj): Buffer {
     buffer.write(buf);
   }
 
-  function mustBeUtf16(string) {
-    return Buffer.byteLength(string, "utf8") != string.length;
+  function mustBeUtf16(string: string) {
+    return Buffer.byteLength(string, "utf8") !== string.length;
   }
 }
 
-function toEntries(dicts: obj) {
+function toEntries(dicts: PlistJsObj): [BplistEntry, ...BplistEntry[]] {
   if (dicts.bplistOverride) {
     return [dicts];
   }
 
   if (Array.isArray(dicts)) {
     return toEntriesArray(dicts);
-  } else if (dicts instanceof Buffer) {
-    return [
-      {
-        type: "data",
-        value: dicts,
-      },
-    ];
+  } else if (Buffer.isBuffer(dicts)) {
+    return [{ type: "data", value: dicts }];
   } else if (dicts instanceof Real) {
-    return [
-      {
-        type: "double",
-        value: dicts.value,
-      },
-    ];
+    return [{ type: "double", value: dicts.value }];
   } else if (typeof dicts === "object") {
     if (dicts instanceof Date) {
-      return [
-        {
-          type: "date",
-          value: dicts,
-        },
-      ];
+      return [{ type: "date", value: dicts }];
     } else if (
       Object.keys(dicts).length == 1 &&
       typeof dicts.UID === "number"
     ) {
-      return [
-        {
-          type: "UID",
-          value: dicts.UID,
-        },
-      ];
+      return [{ type: "UID", value: dicts.UID }];
     } else {
       return toEntriesObject(dicts);
     }
   } else if (typeof dicts === "string") {
-    return [
-      {
-        type: "string",
-        value: dicts,
-      },
-    ];
+    return [{ type: "string", value: dicts }];
   } else if (typeof dicts === "number") {
-    return [
-      {
-        type: "number",
-        value: dicts,
-      },
-    ];
+    return [{ type: "number", value: dicts }];
   } else if (typeof dicts === "boolean") {
-    return [
-      {
-        type: "boolean",
-        value: dicts,
-      },
-    ];
+    return [{ type: "boolean", value: dicts }];
   } else if (typeof dicts === "bigint") {
-    return [
-      {
-        type: "number",
-        value: dicts,
-      },
-    ];
-  } else {
-    throw new Error("unhandled entry: " + dicts);
+    return [{ type: "number", value: dicts }];
   }
+
+  throw new Error(`unhandled entry: ${dicts}`);
 }
 
-function toEntriesArray(arr: obj[]) {
-  let results = [
-    {
-      type: "array",
-      entries: [],
-    },
+function toEntriesArray(
+  arr: PlistJsObj.PlistJsArray,
+): [BplistEntry, ...BplistEntry[]] {
+  let results: [BplistEntry.ArrayEntry, ...BplistEntry[]] = [
+    { type: "array", entries: [] },
   ];
   arr.forEach(function (v) {
     const entry = toEntries(v);
@@ -365,13 +394,11 @@ function toEntriesArray(arr: obj[]) {
   return results;
 }
 
-function toEntriesObject(dict) {
-  let results = [
-    {
-      type: "dict",
-      entryKeys: [],
-      entryValues: [],
-    },
+function toEntriesObject(
+  dict: PlistJsObj.PlistJsDict,
+): [BplistEntry, ...BplistEntry[]] {
+  let results: [BplistEntry.DictEntry, ...BplistEntry[]] = [
+    { type: "dict", entryKeys: [], entryValues: [] },
   ];
   Object.keys(dict).forEach(function (key) {
     const entryKey = toEntries(key);
@@ -379,34 +406,11 @@ function toEntriesObject(dict) {
     results = results.concat(entryKey[0]);
   });
   Object.keys(dict).forEach(function (key) {
-    const entryValue = toEntries(dict[key]);
+    const entryValue = toEntries(dict[key]!);
     results[0].entryValues.push(entryValue[0]);
     results = results.concat(entryValue);
   });
   return results;
-}
-
-function computeOffsetSizeInBytes(maxOffset: number) {
-  if (maxOffset < 256) {
-    return 1;
-  }
-  if (maxOffset < 65536) {
-    return 2;
-  }
-  if (maxOffset < 4294967296) {
-    return 4;
-  }
-  return 8;
-}
-
-function computeIdSizeInBytes(numberOfIds: number) {
-  if (numberOfIds < 256) {
-    return 1;
-  }
-  if (numberOfIds < 65536) {
-    return 2;
-  }
-  return 4;
 }
 
 export { BPlistCreator as default, BPlistCreator, Real };
